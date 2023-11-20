@@ -1,5 +1,8 @@
-use crate::{Attribute, Character};
-use serde::{Deserialize, Serialize, Serializer};
+use crate::{Attribute, Character, Error};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::any::Any;
+use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
 pub enum Modifier {
@@ -28,7 +31,7 @@ pub enum Target {
     Target,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ValueChange {
     name: String,
     change: f64,
@@ -67,13 +70,32 @@ impl ValueChange {
 
 pub struct ActionOutput;
 
-pub trait Action {
+pub trait Action: Debug + ActionClone + AsAny {
     fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput;
 
     fn name(&self) -> Option<&String>;
 }
 
-#[derive(Serialize, Deserialize)]
+pub trait ActionClone {
+    fn clone_box(&self) -> Box<dyn Action>;
+}
+
+impl<T> ActionClone for T
+where
+    T: 'static + Action + Clone,
+{
+    fn clone_box(&self) -> Box<dyn Action> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn Action> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimpleAction {
     name: Option<String>,
     target: Target,
@@ -125,9 +147,16 @@ impl Action for SimpleAction {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ComplexAction {
     name: Option<String>,
     actions: Vec<Box<dyn Action>>,
+}
+
+impl ComplexAction {
+    pub fn new(name: Option<String>, actions: Vec<Box<dyn Action>>) -> Self {
+        Self { name, actions }
+    }
 }
 
 impl Action for ComplexAction {
@@ -140,6 +169,109 @@ impl Action for ComplexAction {
 
     fn name(&self) -> Option<&String> {
         self.name.as_ref()
+    }
+}
+
+pub enum DeserializedAction {
+    Complex(ComplexAction),
+    Simple(SimpleAction),
+}
+
+impl DeserializedAction {
+    pub(crate) fn boxed(self) -> Box<dyn Action> {
+        match self {
+            Self::Simple(s) => Box::new(s),
+            Self::Complex(c) => Box::new(c),
+        }
+    }
+
+    pub fn unwrap_simple(self) -> SimpleAction {
+        match self {
+            Self::Simple(s) => s,
+            _ => panic!("Called unwrap_simple() on non-simple action"),
+        }
+    }
+
+    pub fn unwrap_complex(self) -> ComplexAction {
+        match self {
+            Self::Complex(c) => c,
+            _ => panic!("Called unwrap_complex() on non-complex action"),
+        }
+    }
+}
+
+pub fn deserialize_action_from_str(str: &str) -> Result<DeserializedAction, Error> {
+    let value: Value = serde_json::from_str(str).map_err(|_| Error::ToDo)?;
+    deserialize_action(value, true)
+}
+
+pub fn deserialize_action(value: Value, require_name: bool) -> Result<DeserializedAction, Error> {
+    if is_simple_action(&value) {
+        let r = deserialize_simple_action(value).map_err(|_| Error::ToDo)?;
+        if require_name && r.name.is_none() {
+            Err(Error::ToDo)
+        } else {
+            Ok(DeserializedAction::Simple(r))
+        }
+    } else {
+        if let Some(o) = value.as_object() {
+            let name = o
+                .get("name")
+                .and_then(|v| v.as_str().map(|s| s.to_string()));
+            if require_name && name.is_none() {
+                return Err(Error::ToDo);
+            }
+            if let Some(m) = o.get("actions").and_then(|v| v.as_array()) {
+                let inner_actions = m
+                    .iter()
+                    .map(|v| deserialize_action(v.clone(), false))
+                    .map(|v| v.map(|d| d.boxed()))
+                    .collect::<Result<Vec<Box<dyn Action>>, _>>()?;
+                return Ok(DeserializedAction::Complex(ComplexAction::new(
+                    name,
+                    inner_actions,
+                )));
+            }
+        }
+        Err(Error::ToDo)
+    }
+}
+
+trait UnwrapBoxedAction {
+    fn as_simple(&self) -> Option<SimpleAction>;
+    fn as_complex(&self) -> Option<ComplexAction>;
+}
+
+impl UnwrapBoxedAction for Box<dyn Action> {
+    fn as_simple(&self) -> Option<SimpleAction> {
+        self.as_ref().as_any().downcast_ref::<_>().cloned()
+    }
+
+    fn as_complex(&self) -> Option<ComplexAction> {
+        self.as_ref().as_any().downcast_ref::<_>().cloned()
+    }
+}
+
+fn is_simple_action(value: &Value) -> bool {
+    if let Some(o) = value.as_object() {
+        o.contains_key("target") && o.contains_key("changes") && !o.contains_key("actions")
+    } else {
+        false
+    }
+}
+
+fn deserialize_simple_action(value: Value) -> Result<SimpleAction, serde_json::Error> {
+    serde_json::from_value(value)
+}
+
+// Extension trait for downcasting
+pub trait AsAny {
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl<T: 'static> AsAny for T {
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
@@ -184,5 +316,44 @@ mod tests {
         characters[1].add_modifier(&action1.changes[0].name, Modifier::Mul(0.2));
         action2.apply(&mut characters, 0, &targets);
         assert_eq!(characters[1].attributes[0].value, 1.);
+    }
+
+    #[test]
+    fn test_deserialize() {
+        let str = r#"
+            {
+                "name" : "SimpleAction",
+                "target" : "Target",
+                "changes" : [ {
+                    "name" : "a",
+                    "change" : 1
+                }]
+            }
+        "#;
+        let result = deserialize_action_from_str(str).unwrap().unwrap_simple();
+
+        assert_eq!(result.name, Some("SimpleAction".to_string()));
+        assert_eq!(result.changes, vec![ValueChange::new("a", 1.)]);
+        let str = r#"{
+            "name" : "ComplexAction",
+            "actions" : [
+                {
+                    "target" : "Target",
+                    "changes" : []
+                },
+                {
+                    "name" : "InnerComplex",
+                    "actions" : []
+                }
+            ]
+        }"#;
+        let result = deserialize_action_from_str(str).unwrap().unwrap_complex();
+        assert_eq!(result.name, Some("ComplexAction".to_string()));
+        println!("{:?}", result.actions[0].type_id());
+        println!("{:?}", result.actions[1].type_id());
+        let s = result.actions[0].as_simple();
+        let c = result.actions[1].as_complex();
+        assert!(s.is_some());
+        assert!(c.is_some());
     }
 }
