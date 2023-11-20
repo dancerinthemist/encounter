@@ -1,4 +1,5 @@
 use crate::{Attribute, Character};
+use serde::{Deserialize, Serialize, Serializer};
 
 #[derive(Debug, Clone)]
 pub enum Modifier {
@@ -21,13 +22,13 @@ impl Modifier {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Target {
     Actor,
     Target,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValueChange {
     name: String,
     change: f64,
@@ -71,6 +72,8 @@ pub trait Action {
 
     fn name(&self) -> Option<&String>;
 }
+
+#[derive(Serialize, Deserialize)]
 pub struct SimpleAction {
     name: Option<String>,
     target: Target,
