@@ -70,6 +70,14 @@ impl ValueChange {
 
 pub struct ActionOutput;
 
+pub struct ActionInfo;
+
+impl ActionInfo {
+    pub(crate) fn name(&self) -> &str {
+        todo!()
+    }
+}
+
 pub trait Action: Debug + ActionClone + AsAny {
     fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput;
 
