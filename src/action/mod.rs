@@ -1,8 +1,11 @@
+pub mod output;
+
 use crate::{Attribute, Character, Error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::any::Any;
 use std::fmt::Debug;
+use crate::output::ActionOutput;
 
 #[derive(Debug, Clone)]
 pub enum Modifier {
@@ -68,12 +71,10 @@ impl ValueChange {
     }
 }
 
-pub struct ActionOutput;
-
 pub struct ActionInfo;
 
 impl ActionInfo {
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         todo!()
     }
 }
@@ -147,7 +148,25 @@ impl Action for SimpleAction {
                 }
             }
         }
-        ActionOutput
+        ActionOutput::new(self.name(), "")
+    }
+
+    fn name(&self) -> Option<&String> {
+        self.name.as_ref()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SelfOtherAction {
+    name: Option<String>,
+    action_self: SimpleAction,
+    action_other: SimpleAction,
+}
+
+impl Action for SelfOtherAction {
+    fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput {
+        self.action_self.apply(characters, actor, targets);
+        self.action_other.apply(characters, actor, targets)
     }
 
     fn name(&self) -> Option<&String> {
@@ -169,10 +188,11 @@ impl ComplexAction {
 
 impl Action for ComplexAction {
     fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput {
+        let mut output = ActionOutput::new(self.name(), "");
         for a in &self.actions {
-            a.as_ref().apply(characters, actor, targets);
+            output = output.combine(a.as_ref().apply(characters, actor, targets));
         }
-        ActionOutput
+        output
     }
 
     fn name(&self) -> Option<&String> {
