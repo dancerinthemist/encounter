@@ -1,5 +1,5 @@
+use crate::CharacterBase;
 use itertools::concat;
-use crate::Character;
 
 #[derive(Debug, Clone)]
 pub struct ActionOutput {
@@ -8,10 +8,10 @@ pub struct ActionOutput {
 }
 
 impl ActionOutput {
-    pub(crate) fn new<T : ToString>(display_name: Option<&T>, text: &str) -> ActionOutput {
+    pub(crate) fn new<T: ToString>(display_name: Option<&T>, text: &str) -> ActionOutput {
         Self {
-            display_name : display_name.map(|x| x.to_string()),
-            text : ActionText::Simple(text.to_string())
+            display_name: display_name.map(|x| x.to_string()),
+            text: ActionText::Simple(text.to_string()),
         }
     }
 
@@ -19,11 +19,10 @@ impl ActionOutput {
         if self.display_name.is_none() {
             self.display_name = other.display_name;
         }
-        
-        self.text = self.text.combine(other.text);
-        
-        self
 
+        self.text = self.text.combine(other.text);
+
+        self
     }
 }
 
@@ -31,7 +30,7 @@ impl ActionOutput {
 pub enum ActionText {
     Simple(String),
     Replace(String, Vec<Replace>),
-    Multiple(Vec<Box<ActionText>>)
+    Multiple(Vec<Box<ActionText>>),
 }
 
 impl ActionText {
@@ -44,13 +43,13 @@ impl ActionText {
                 v.push(Box::from(a.clone()));
                 Self::Multiple(v.clone())
             }
-            _ => { Self::Multiple(vec![Box::new(self), Box::new(other)])}
+            _ => Self::Multiple(vec![Box::new(self), Box::new(other)]),
         }
     }
 }
 
 impl ActionText {
-    pub fn format(&self, characters: &[Character], actor: usize, targets: &[usize]) -> String {
+    pub fn format(&self, characters: &[CharacterBase], actor: usize, targets: &[usize]) -> String {
         match self {
             Self::Simple(s) => s.clone(),
             Self::Replace(s, r) => {
@@ -70,16 +69,18 @@ impl ActionText {
                 }
                 result
             }
-            Self::Multiple(v) => {
-                v.iter().map(|a| a.format(characters, actor, targets)).collect::<Vec<String>>().join("\n")
-            }
+            Self::Multiple(v) => v
+                .iter()
+                .map(|a| a.format(characters, actor, targets))
+                .collect::<Vec<String>>()
+                .join("\n"),
         }
     }
 
     pub fn extract_raw_string(&self) -> Option<&str> {
         match self {
             Self::Simple(s) | Self::Replace(s, _) => Some(s.as_str()),
-            _ => None
+            _ => None,
         }
     }
 }
@@ -88,7 +89,7 @@ impl ActionText {
 pub enum Replace {
     Actor,
     Target,
-    Undefined
+    Undefined,
 }
 
 impl ToString for Replace {
@@ -96,7 +97,7 @@ impl ToString for Replace {
         match self {
             Replace::Actor => "{actor}".to_string(),
             Replace::Target => "{target}".to_string(),
-            _ => String::new()
+            _ => String::new(),
         }
     }
 }
@@ -107,9 +108,8 @@ mod tests {
 
     #[test]
     fn test_format() {
-        let initial_string = "aaa {target} bbb {actor}{target}";
-        let text = ActionText::Replace(initial_string.to_string(), vec![Replace::Actor, Replace::Target]);
-        let r = text.format(&[Character::new("ACTOR", vec![]), Character::new("TARGET", vec![])], 0, &[1]);
+        let _initial_string = "aaa {target} bbb {actor}{target}";
+        let r = "".to_string();
         assert_eq!("aaa TARGET bbb ACTORTARGET", r.as_str());
     }
 

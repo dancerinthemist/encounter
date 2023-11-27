@@ -1,295 +1,290 @@
+pub(crate) mod modifier;
 pub mod output;
 
-use crate::{Attribute, Character, Error};
+use crate::action::modifier::{IncomingModifierCollection, OutgoingModifierCollection};
+use crate::{AttributeCollection, Status, StatusCollection};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::Debug;
-use crate::output::ActionOutput;
-
-#[derive(Debug, Clone)]
-pub enum Modifier {
-    Add(f64),
-    Mul(f64),
-}
-
-impl Default for Modifier {
-    fn default() -> Self {
-        Self::Add(0.)
-    }
-}
-
-impl Modifier {
-    pub(crate) fn apply(&self, value: &mut f64) {
-        match self {
-            Self::Add(v) => *value += v,
-            Self::Mul(v) => *value *= v,
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-pub enum Target {
-    Actor,
-    Target,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ValueChange {
+pub struct Action {
     name: String,
-    change: f64,
+    inner: InnerAction,
 }
 
-impl ValueChange {
+impl Action {
+    pub fn new(name: String, inner: InnerAction) -> Self {
+        Self { name, inner }
+    }
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
+
+    pub fn inner(&self) -> &InnerAction {
+        &self.inner
+    }
+
+    pub fn apply_modifiers(&self, actor: &Actor, receiver: &Receiver) -> InnerAction {
+        self.inner.apply_modifiers(actor, receiver, self)
+    }
 }
 
-impl ValueChange {
-    pub(crate) fn apply_with_modifiers(
+#[derive(Debug)]
+pub enum InnerAction {
+    Simple(SimpleAction),
+    SelfOther(SimpleAction, SimpleAction),
+    Custom(Box<dyn CustomAction>),
+}
+
+impl InnerAction {
+    pub fn apply_modifiers(&self, actor: &Actor, receiver: &Receiver, action: &Action) -> Self {
+        match self {
+            Self::Simple(a) => Self::Simple(a.apply_modifiers(actor, receiver, action)),
+            Self::SelfOther(a1, a2) => Self::SelfOther(
+                a1.apply_modifiers(actor, actor, action),
+                a2.apply_modifiers(actor, receiver, action),
+            ),
+            _ => todo!(),
+        }
+    }
+
+    pub fn apply(
         &self,
-        attribute: &mut Attribute,
-        modifiers: &Vec<Modifier>,
+        attribute_collections: &mut [&mut AttributeCollection],
+        status_collections: &mut [&mut StatusCollection],
+        targets: &HashMap<Target, usize>,
     ) {
-        attribute.set_value(attribute.value() + self.apply_modifiers(modifiers));
-    }
-
-    fn apply_modifiers(&self, modifiers: &Vec<Modifier>) -> f64 {
-        let mut applied = self.change;
-        for m in modifiers {
-            m.apply(&mut applied);
+        match self {
+            InnerAction::Simple(a) => {
+                a.apply(
+                    *attribute_collections
+                        .get_mut(targets[&Target::Target])
+                        .unwrap(),
+                    *status_collections
+                        .get_mut(targets[&Target::Target])
+                        .unwrap(),
+                );
+            }
+            InnerAction::SelfOther(a1, a2) => {
+                a1.apply(
+                    *attribute_collections
+                        .get_mut(targets[&Target::Actor])
+                        .unwrap(),
+                    *status_collections.get_mut(targets[&Target::Actor]).unwrap(),
+                );
+                a2.apply(
+                    *attribute_collections
+                        .get_mut(targets[&Target::Target])
+                        .unwrap(),
+                    *status_collections
+                        .get_mut(targets[&Target::Target])
+                        .unwrap(),
+                );
+            }
+            InnerAction::Custom(_) => todo!(),
         }
-        applied
-    }
-
-    pub fn new(name: &str, change: f64) -> Self {
-        Self {
-            name: name.to_ascii_lowercase(),
-            change,
-        }
-    }
-}
-
-pub struct ActionInfo;
-
-impl ActionInfo {
-    pub fn name(&self) -> &str {
-        todo!()
-    }
-}
-
-pub trait Action: Debug + ActionClone + AsAny {
-    fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput;
-
-    fn name(&self) -> Option<&String>;
-}
-
-pub trait ActionClone {
-    fn clone_box(&self) -> Box<dyn Action>;
-}
-
-impl<T> ActionClone for T
-where
-    T: 'static + Action + Clone,
-{
-    fn clone_box(&self) -> Box<dyn Action> {
-        Box::new(self.clone())
-    }
-}
-
-impl Clone for Box<dyn Action> {
-    fn clone(&self) -> Self {
-        self.clone_box()
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SimpleAction {
-    name: Option<String>,
     target: Target,
-    changes: Vec<ValueChange>,
+    elements: Vec<ActionElement>,
 }
 
 impl SimpleAction {
-    pub fn new(name: &str, target: Target, changes: Vec<ValueChange>) -> Self {
+    pub fn new_empty(target: Target) -> Self {
+        Self::new(target, vec![])
+    }
+    pub fn new(target: Target, elements: Vec<ActionElement>) -> Self {
+        Self { target, elements }
+    }
+
+    pub fn set_target(&mut self, target: Target) {
+        self.target = target;
+    }
+
+    pub fn apply_modifiers(
+        &self,
+        actor: &Actor,
+        receiver: &Receiver,
+        action: &Action,
+    ) -> SimpleAction {
+        let mut result = SimpleAction::new_empty(self.target);
+        for e in &self.elements {
+            match e {
+                ActionElement::AttributeChange(a) => result.elements.push(
+                    ActionElement::AttributeChange(a.apply_modifiers(actor, receiver, action)),
+                ),
+                other => result.elements.push(other.clone()),
+            }
+        }
+        result
+    }
+
+    pub fn apply(&self, attributes: &mut AttributeCollection, statuses: &mut StatusCollection) {
+        for e in &self.elements {
+            e.apply(attributes, statuses);
+        }
+    }
+}
+
+pub type Actor<'a> = (
+    &'a AttributeCollection,
+    &'a StatusCollection,
+    &'a OutgoingModifierCollection,
+);
+pub type Receiver<'a> = (
+    &'a AttributeCollection,
+    &'a StatusCollection,
+    &'a IncomingModifierCollection,
+);
+
+// ===============
+// Custom Actions
+// ===============
+
+pub trait CustomAction: Debug + ActionClone + AsAny {
+    fn name(&self) -> Option<&String>;
+}
+
+pub trait ActionClone {
+    fn clone_box(&self) -> Box<dyn CustomAction>;
+}
+
+impl<T> ActionClone for T
+where
+    T: 'static + CustomAction + Clone,
+{
+    fn clone_box(&self) -> Box<dyn CustomAction> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn CustomAction> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
+}
+
+// ===============
+// Target & Changes
+// ===============
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Hash)]
+pub enum Target {
+    Actor,
+    Target,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum ActionElement {
+    AttributeChange(AttributeChange),
+    StatusChange(StatusChange),
+}
+
+impl ActionElement {
+    pub(crate) fn apply(
+        &self,
+        attributes: &mut AttributeCollection,
+        statuses: &mut StatusCollection,
+    ) {
+        match self {
+            ActionElement::AttributeChange(a) => a.apply(attributes),
+            ActionElement::StatusChange(s) => s.apply(statuses),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+pub enum AttributeChangeType {
+    Add,
+    Mul,
+    Set,
+    Average(f64, f64), // Weights
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AttributeChange {
+    name: String,
+    change: f64,
+    op: AttributeChangeType,
+}
+
+impl Into<ActionElement> for AttributeChange {
+    fn into(self) -> ActionElement {
+        ActionElement::AttributeChange(self)
+    }
+}
+
+impl AttributeChange {
+    pub(crate) fn apply(&self, attributes: &mut AttributeCollection) {
+        if let Some(a) = attributes.get_attribute_mut(self.name()) {
+            match self.op {
+                AttributeChangeType::Add => a.set_value(a.value + self.change),
+                AttributeChangeType::Mul => a.set_value(a.value * self.change),
+                AttributeChangeType::Set => a.set_value(self.change),
+                AttributeChangeType::Average(weight_current, weight_new) => {
+                    a.set_value((a.value * weight_current + self.change * weight_new)
+                        / (weight_current + weight_new));
+                }
+            }
+        }
+    }
+}
+
+pub(crate) type AttributeStatusCollection<'a> = (&'a AttributeCollection, &'a StatusCollection);
+
+impl AttributeChange {
+    pub(crate) fn apply_modifiers(
+        &self,
+        actor: &Actor,
+        receiver: &Receiver,
+        action: &Action,
+    ) -> Self {
+        let (actor_attributes, actor_statuses, actor_collection) = actor;
+        let (receiver_attributes, receiver_statuses, receiver_collection) = receiver;
+        let actor = (*actor_attributes, *actor_statuses);
+        let receiver = (*receiver_attributes, *receiver_statuses);
+        receiver_collection.generate_attribute_change(
+            &actor_collection.generate_attribute_change(self, &actor, &receiver, action),
+            &actor,
+            &receiver,
+            action,
+        )
+    }
+}
+
+impl AttributeChange {
+    pub fn new(name: &str, change: f64) -> Self {
         Self {
-            name: Some(name.to_string()),
-            target,
-            changes,
+            name: name.to_ascii_lowercase(),
+            change,
+            op : AttributeChangeType::Add
         }
     }
 
-    pub fn new_anonymous(target: Target, changes: Vec<ValueChange>) -> Self {
-        Self {
-            name: None,
-            target,
-            changes,
-        }
+    pub fn with_op(mut self, op: AttributeChangeType) -> Self {
+        self.op = op;
+        self
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
     }
 }
 
-impl Action for SimpleAction {
-    fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput {
-        let t = &self.target;
-        let changes = &self.changes;
-        for change in changes {
-            let targets_for_action = match t {
-                Target::Actor => {
-                    vec![actor]
-                }
-                Target::Target => {
-                    vec![*targets.first().unwrap()]
-                }
-            };
-            for t in targets_for_action {
-                if let Some(c) = characters.get_mut(t) {
-                    c.apply(change);
-                }
-            }
-        }
-        ActionOutput::new(self.name(), "")
-    }
-
-    fn name(&self) -> Option<&String> {
-        self.name.as_ref()
-    }
+/// Describes Changing a Status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StatusChange {
+    Add(Status),
+    Remove(Status),
 }
 
-#[derive(Clone, Debug)]
-pub struct SelfOtherAction {
-    name: Option<String>,
-    action_self: SimpleAction,
-    action_other: SimpleAction,
-}
-
-impl Action for SelfOtherAction {
-    fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput {
-        self.action_self.apply(characters, actor, targets);
-        self.action_other.apply(characters, actor, targets)
+impl StatusChange {
+    pub(crate) fn apply(&self, statuses: &mut StatusCollection) {
+        todo!()
     }
-
-    fn name(&self) -> Option<&String> {
-        self.name.as_ref()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ComplexAction {
-    name: Option<String>,
-    actions: Vec<Box<dyn Action>>,
-}
-
-impl ComplexAction {
-    pub fn new(name: Option<String>, actions: Vec<Box<dyn Action>>) -> Self {
-        Self { name, actions }
-    }
-}
-
-impl Action for ComplexAction {
-    fn apply(&self, characters: &mut [Character], actor: usize, targets: &[usize]) -> ActionOutput {
-        let mut output = ActionOutput::new(self.name(), "");
-        for a in &self.actions {
-            output = output.combine(a.as_ref().apply(characters, actor, targets));
-        }
-        output
-    }
-
-    fn name(&self) -> Option<&String> {
-        self.name.as_ref()
-    }
-}
-
-pub enum DeserializedAction {
-    Complex(ComplexAction),
-    Simple(SimpleAction),
-}
-
-impl DeserializedAction {
-    pub(crate) fn boxed(self) -> Box<dyn Action> {
-        match self {
-            Self::Simple(s) => Box::new(s),
-            Self::Complex(c) => Box::new(c),
-        }
-    }
-
-    pub fn unwrap_simple(self) -> SimpleAction {
-        match self {
-            Self::Simple(s) => s,
-            _ => panic!("Called unwrap_simple() on non-simple action"),
-        }
-    }
-
-    pub fn unwrap_complex(self) -> ComplexAction {
-        match self {
-            Self::Complex(c) => c,
-            _ => panic!("Called unwrap_complex() on non-complex action"),
-        }
-    }
-}
-
-pub fn deserialize_action_from_str(str: &str) -> Result<DeserializedAction, Error> {
-    let value: Value = serde_json::from_str(str).map_err(|_| Error::ToDo)?;
-    deserialize_action(value, true)
-}
-
-pub fn deserialize_action(value: Value, require_name: bool) -> Result<DeserializedAction, Error> {
-    if is_simple_action(&value) {
-        let r = deserialize_simple_action(value).map_err(|_| Error::ToDo)?;
-        if require_name && r.name.is_none() {
-            Err(Error::ToDo)
-        } else {
-            Ok(DeserializedAction::Simple(r))
-        }
-    } else {
-        if let Some(o) = value.as_object() {
-            let name = o
-                .get("name")
-                .and_then(|v| v.as_str().map(|s| s.to_string()));
-            if require_name && name.is_none() {
-                return Err(Error::ToDo);
-            }
-            if let Some(m) = o.get("actions").and_then(|v| v.as_array()) {
-                let inner_actions = m
-                    .iter()
-                    .map(|v| deserialize_action(v.clone(), false))
-                    .map(|v| v.map(|d| d.boxed()))
-                    .collect::<Result<Vec<Box<dyn Action>>, _>>()?;
-                return Ok(DeserializedAction::Complex(ComplexAction::new(
-                    name,
-                    inner_actions,
-                )));
-            }
-        }
-        Err(Error::ToDo)
-    }
-}
-
-trait UnwrapBoxedAction {
-    fn as_simple(&self) -> Option<SimpleAction>;
-    fn as_complex(&self) -> Option<ComplexAction>;
-}
-
-impl UnwrapBoxedAction for Box<dyn Action> {
-    fn as_simple(&self) -> Option<SimpleAction> {
-        self.as_ref().as_any().downcast_ref::<_>().cloned()
-    }
-
-    fn as_complex(&self) -> Option<ComplexAction> {
-        self.as_ref().as_any().downcast_ref::<_>().cloned()
-    }
-}
-
-fn is_simple_action(value: &Value) -> bool {
-    if let Some(o) = value.as_object() {
-        o.contains_key("target") && o.contains_key("changes") && !o.contains_key("actions")
-    } else {
-        false
-    }
-}
-
-fn deserialize_simple_action(value: Value) -> Result<SimpleAction, serde_json::Error> {
-    serde_json::from_value(value)
 }
 
 // Extension trait for downcasting
@@ -304,84 +299,4 @@ impl<T: 'static> AsAny for T {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Attribute;
-
-    fn create_scene() -> (Vec<Character>, (SimpleAction, SimpleAction), Vec<usize>) {
-        let attributes = vec![Attribute::new("rage")];
-        let c1 = Character::new("C1", attributes.clone());
-        let c2 = Character::new("C2", attributes.clone());
-        let characters = vec![c1, c2];
-        let action1 =
-            SimpleAction::new_anonymous(Target::Actor, vec![ValueChange::new("rage", 5.0)]);
-        let action2 =
-            SimpleAction::new_anonymous(Target::Target, vec![ValueChange::new("rage", 5.0)]);
-        let targets = vec![1];
-        (characters, (action1, action2), targets)
-    }
-
-    #[test]
-    fn test_action() {
-        let (mut characters, (action1, action2), targets) = create_scene();
-        action1.apply(&mut characters, 0, &targets);
-        assert_eq!(characters[0].attributes[0].value, 5.);
-        assert_eq!(characters[1].attributes[0].value, 0.);
-        action2.apply(&mut characters, 0, &targets);
-        assert_eq!(characters[0].attributes[0].value, 5.);
-        assert_eq!(characters[1].attributes[0].value, 5.);
-        action1.apply(&mut characters, 1, &targets);
-        assert_eq!(characters[0].attributes[0].value, 5.);
-        assert_eq!(characters[1].attributes[0].value, 10.);
-    }
-
-    #[test]
-    fn test_modifiers() {
-        let (mut characters, (action1, action2), targets) = create_scene();
-        characters[0].add_modifier(&action1.changes[0].name, Modifier::Add(3.));
-        action1.apply(&mut characters, 0, &targets);
-        assert_eq!(characters[0].attributes[0].value, 8.);
-        characters[1].add_modifier(&action1.changes[0].name, Modifier::Mul(0.2));
-        action2.apply(&mut characters, 0, &targets);
-        assert_eq!(characters[1].attributes[0].value, 1.);
-    }
-
-    #[test]
-    fn test_deserialize() {
-        let str = r#"
-            {
-                "name" : "SimpleAction",
-                "target" : "Target",
-                "changes" : [ {
-                    "name" : "a",
-                    "change" : 1
-                }]
-            }
-        "#;
-        let result = deserialize_action_from_str(str).unwrap().unwrap_simple();
-
-        assert_eq!(result.name, Some("SimpleAction".to_string()));
-        assert_eq!(result.changes, vec![ValueChange::new("a", 1.)]);
-        let str = r#"{
-            "name" : "ComplexAction",
-            "actions" : [
-                {
-                    "target" : "Target",
-                    "changes" : []
-                },
-                {
-                    "name" : "InnerComplex",
-                    "actions" : []
-                }
-            ]
-        }"#;
-        let result = deserialize_action_from_str(str).unwrap().unwrap_complex();
-        assert_eq!(result.name, Some("ComplexAction".to_string()));
-        println!("{:?}", result.actions[0].type_id());
-        println!("{:?}", result.actions[1].type_id());
-        let s = result.actions[0].as_simple();
-        let c = result.actions[1].as_complex();
-        assert!(s.is_some());
-        assert!(c.is_some());
-    }
-}
+mod tests {}

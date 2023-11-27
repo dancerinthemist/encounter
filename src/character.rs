@@ -1,54 +1,89 @@
-use crate::action::{Modifier, ValueChange};
+use crate::action::modifier::{IncomingModifierCollection, OutgoingModifierCollection};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct Character {
+// ===============
+// Character
+// ===============
+
+pub type Character = (
+    CharacterBase,
+    AttributeCollection,
+    StatusCollection,
+    IncomingModifierCollection,
+    OutgoingModifierCollection,
+);
+
+pub struct CharacterBase {
     name: String,
-    pub(crate) attributes: Vec<Attribute>,
-    attribute_map: HashMap<String, usize>,
-    attribute_modifiers: Vec<Vec<Modifier>>,
 }
 
-impl Character {
-    pub fn new(name: &str, attributes: Vec<Attribute>) -> Character {
-        let attribute_map = attributes
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (a.name.to_string(), i))
-            .collect::<_>();
-        let modifiers = vec![vec![]; attributes.len()];
+impl CharacterBase {
+    pub(crate) fn name(&self) -> &str {
+        self.name.as_ref()
+    }
+}
+
+impl CharacterBase {
+    pub fn new(name: &str) -> Character {
+        (
+            Self::new_base(name),
+            AttributeCollection::default(),
+            StatusCollection::default(),
+            IncomingModifierCollection::default(),
+            OutgoingModifierCollection::default(),
+        )
+    }
+    fn new_base(name: &str) -> Self {
         Self {
             name: name.to_string(),
-            attributes,
-            attribute_map,
-            attribute_modifiers: modifiers,
         }
     }
+}
 
-    pub fn name(&self) -> &str {
-        self.name.as_str()
+// ===============
+// Attribute
+// ===============
+
+#[derive(Default, Debug)]
+pub struct AttributeCollection {
+    attributes: Vec<Attribute>,
+    attribute_map: HashMap<String, usize>,
+}
+
+impl AttributeCollection {
+    pub fn new() -> Self {
+        Self {
+            attributes: vec![],
+            attribute_map: HashMap::new(),
+        }
     }
 
     pub fn add_attribute(&mut self, attribute: Attribute) {
-        let name = attribute.name.clone();
+        self.attribute_map
+            .insert(attribute.name.clone(), self.attributes.len());
         self.attributes.push(attribute);
-        self.attribute_map.insert(name, self.attributes.len() - 1);
-        self.attribute_modifiers.push(vec![]);
     }
 
-    pub fn add_modifier(&mut self, for_value: &str, modifier: Modifier) {
-        if let Some(i) = self.attribute_map.get(&for_value.to_ascii_lowercase()) {
-            if let Some(mods) = self.attribute_modifiers.get_mut(*i) {
-                mods.push(modifier);
-            }
-        }
+    pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
+        self.attribute_map
+            .get(name)
+            .and_then(|idx| self.attributes.get(*idx))
     }
 
-    pub(crate) fn apply(&mut self, change: &ValueChange) {
-        if let Some(i) = self.attribute_map.get(change.name()) {
-            if let Some(a) = self.attributes.get_mut(*i) {
-                change.apply_with_modifiers(a, self.attribute_modifiers.get(*i).unwrap_or(&vec![]));
-            }
+    pub fn get_attribute_value(&self, name: &str) -> Option<f64> {
+        self.get_attribute(name).map(|a| a.value)
+    }
+
+    pub fn get_attribute_mut(&mut self, name: &str) -> Option<&mut Attribute> {
+        self.attribute_map
+            .get(name)
+            .and_then(|idx| self.attributes.get_mut(*idx))
+    }
+
+    pub fn set_attribute_value(&mut self, name: &str, value: f64) {
+        if let Some(a) = self.get_attribute_mut(name) {
+            a.set_value(value);
         }
     }
 }
@@ -57,10 +92,14 @@ impl Character {
 pub struct Attribute {
     name: String,
     pub(crate) value: f64,
+    min: Option<f64>,
+    max: Option<f64>
 }
 
 impl Attribute {
     pub(crate) fn set_value(&mut self, new_value: f64) {
+        let new_value = self.max.map_or(new_value, |m| new_value.min(m));
+        let new_value = self.min.map_or(new_value, |m| new_value.max(m));
         self.value = new_value;
     }
 
@@ -74,12 +113,31 @@ impl Attribute {
         Attribute {
             name: name.to_ascii_lowercase(),
             value: 0.,
+            min: None,
+            max: None,
         }
     }
 
-    pub fn with_value(self, value: f64) -> Self {
-        let mut result = self;
-        result.value = value;
-        result
+    pub fn with_value(mut self, value: f64) -> Self {
+        self.value = value;
+        self
     }
+
+    pub fn with_bounds(mut self, min: Option<f64>, max: Option<f64>) -> Self {
+        self.min = min;
+        self.max = max;
+        self
+    }
+}
+
+// ===============
+// STATUS
+// ===============
+
+#[derive(Default, Debug)]
+pub struct StatusCollection;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Status {
+    TODO,
 }
