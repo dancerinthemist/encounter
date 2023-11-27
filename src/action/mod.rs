@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
+
 pub struct Action {
     name: String,
     inner: InnerAction,
@@ -277,8 +278,8 @@ impl AttributeChange {
 /// Describes Changing a Status
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StatusChange {
-    Add(Status),
-    Remove(Status),
+    Add(Box<dyn Status>),
+    Remove(Box<dyn Status>),
 }
 
 impl StatusChange {
@@ -300,3 +301,4 @@ impl<T: 'static> AsAny for T {
 
 #[cfg(test)]
 mod tests {}
+

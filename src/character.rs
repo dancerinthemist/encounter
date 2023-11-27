@@ -1,6 +1,6 @@
 use crate::action::modifier::{IncomingModifierCollection, OutgoingModifierCollection};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 
 // ===============
 // Character
@@ -137,7 +137,25 @@ impl Attribute {
 #[derive(Default, Debug)]
 pub struct StatusCollection;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Status {
-    TODO,
+#[typetag::serde]
+pub trait Status : Debug + StatusClone + Eq {}
+
+impl Clone for Box<dyn Status> {
+    fn clone(&self) -> Self {
+        self.clone_box()
+    }
 }
+
+pub trait StatusClone {
+    fn clone_box(&self) -> Box<dyn Status>;
+}
+
+impl<T> StatusClone for T
+    where
+        T: 'static + Status + Clone
+{
+    fn clone_box(&self) -> Box<dyn Status> {
+        Box::new(self.clone())
+    }
+}
+
