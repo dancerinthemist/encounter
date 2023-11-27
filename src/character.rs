@@ -1,17 +1,19 @@
-use crate::action::modifier::{IncomingModifierCollection, OutgoingModifierCollection};
-use std::collections::HashMap;
+use crate::action::modifier::{IncomingModifierCollection, Modifier, OutgoingModifierCollection};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::{Add, Div, Mul, Sub};
 
 // ===============
 // Character
 // ===============
 
-pub type Character = (
+pub type Character<A, S, M> = (
     CharacterBase,
-    AttributeCollection,
-    StatusCollection,
-    IncomingModifierCollection,
-    OutgoingModifierCollection,
+    AttributeCollection<A>,
+    StatusCollection<S>,
+    IncomingModifierCollection<M>,
+    OutgoingModifierCollection<M>,
 );
 
 pub struct CharacterBase {
@@ -25,7 +27,12 @@ impl CharacterBase {
 }
 
 impl CharacterBase {
-    pub fn new(name: &str) -> Character {
+    pub fn new<A, S, M>(name: &str) -> Character<A, S, M>
+    where
+        A: Attribute,
+        S: Status,
+        M: Modifier,
+    {
         (
             Self::new_base(name),
             AttributeCollection::default(),
@@ -45,13 +52,15 @@ impl CharacterBase {
 // Attribute
 // ===============
 
+pub trait AttributeIdentifier: Debug + Default + Clone + Hash + PartialEq + Eq {}
+
 #[derive(Default, Debug)]
-pub struct AttributeCollection {
-    attributes: Vec<Attribute>,
-    attribute_map: HashMap<String, usize>,
+pub struct AttributeCollection<A: Attribute> {
+    attributes: Vec<A>,
+    attribute_map: HashMap<A::Identifier, usize>,
 }
 
-impl AttributeCollection {
+impl<A: Attribute> AttributeCollection<A> {
     pub fn new() -> Self {
         Self {
             attributes: vec![],
@@ -59,73 +68,52 @@ impl AttributeCollection {
         }
     }
 
-    pub fn add_attribute(&mut self, attribute: Attribute) {
-        self.attribute_map
-            .insert(attribute.name.clone(), self.attributes.len());
+    pub fn add_attribute(&mut self, identifier: A::Identifier, attribute: A) {
+        self.attribute_map.insert(identifier, self.attributes.len());
         self.attributes.push(attribute);
     }
 
-    pub fn get_attribute(&self, name: &str) -> Option<&Attribute> {
+    pub fn get_attribute(&self, identifier: &A::Identifier) -> Option<&A> {
         self.attribute_map
-            .get(name)
+            .get(identifier)
             .and_then(|idx| self.attributes.get(*idx))
     }
 
-    pub fn get_attribute_value(&self, name: &str) -> Option<f64> {
-        self.get_attribute(name).map(|a| a.value)
+    pub fn get_attribute_value(&self, identifier: &A::Identifier) -> Option<A::Value> {
+        self.get_attribute(identifier).map(|a| a.value())
     }
 
-    pub fn get_attribute_mut(&mut self, name: &str) -> Option<&mut Attribute> {
+    pub fn get_attribute_mut(&mut self, identifier: &A::Identifier) -> Option<&mut A> {
         self.attribute_map
-            .get(name)
+            .get(identifier)
             .and_then(|idx| self.attributes.get_mut(*idx))
     }
 
-    pub fn set_attribute_value(&mut self, name: &str, value: f64) {
-        if let Some(a) = self.get_attribute_mut(name) {
+    pub fn set_attribute_value(&mut self, identifier: &A::Identifier, value: A::Value) {
+        if let Some(a) = self.get_attribute_mut(identifier) {
             a.set_value(value);
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Attribute {
-    name: String,
-    pub(crate) value: f64,
-    min: Option<f64>,
-    max: Option<f64>
+pub trait AttributeValue:
+    Add<Output = Self>
+    + Sub<Output = Self>
+    + Mul<Self, Output = Self>
+    + Div<Self, Output = Self>
+    + Debug
+    + Copy
+    + Clone
+{
 }
 
-impl Attribute {
-    pub(crate) fn set_value(&mut self, new_value: f64) {
-        let new_value = self.max.map_or(new_value, |m| new_value.min(m));
-        let new_value = self.min.map_or(new_value, |m| new_value.max(m));
-        self.value = new_value;
-    }
-
-    pub fn value(&self) -> f64 {
-        self.value
-    }
-}
-
-impl Attribute {
-    pub fn new(name: &str) -> Self {
-        Attribute {
-            name: name.to_ascii_lowercase(),
-            value: 0.,
-            min: None,
-            max: None,
-        }
-    }
-
-    pub fn with_value(mut self, value: f64) -> Self {
-        self.value = value;
-        self
-    }
-
-    pub fn with_bounds(mut self, min: Option<f64>, max: Option<f64>) -> Self {
-        self.min = min;
-        self.max = max;
+pub trait Attribute: Default + Debug + Clone {
+    type Value: AttributeValue;
+    type Identifier: AttributeIdentifier;
+    fn set_value(&mut self, new_value: Self::Value);
+    fn value(&self) -> Self::Value;
+    fn with_value(mut self, value: Self::Value) -> Self {
+        self.set_value(value);
         self
     }
 }
@@ -135,27 +123,21 @@ impl Attribute {
 // ===============
 
 #[derive(Default, Debug)]
-pub struct StatusCollection;
+pub struct StatusCollection<S: Status> {
+    statuses: HashSet<S>,
+}
 
-#[typetag::serde]
-pub trait Status : Debug + StatusClone + Eq {}
+impl<S: Status> StatusCollection<S> {
+    pub fn add(&mut self, status: S) {
+        self.statuses.insert(status);
+    }
 
-impl Clone for Box<dyn Status> {
-    fn clone(&self) -> Self {
-        self.clone_box()
+    pub fn remove(&mut self, status: &S) {
+        self.statuses.remove(status);
+    }
+    pub fn contains(&self, status: &S) -> bool {
+        self.statuses.contains(status)
     }
 }
 
-pub trait StatusClone {
-    fn clone_box(&self) -> Box<dyn Status>;
-}
-
-impl<T> StatusClone for T
-    where
-        T: 'static + Status + Clone
-{
-    fn clone_box(&self) -> Box<dyn Status> {
-        Box::new(self.clone())
-    }
-}
-
+pub trait Status: Debug + Clone + Default + Eq + PartialEq + Hash {}

@@ -1,44 +1,59 @@
 pub(crate) mod modifier;
 pub mod output;
 
-use crate::action::modifier::{IncomingModifierCollection, OutgoingModifierCollection};
-use crate::{AttributeCollection, Status, StatusCollection};
+use crate::action::modifier::{IncomingModifierCollection, Modifier, OutgoingModifierCollection};
+use crate::{Attribute, AttributeCollection, AttributeValue, Status, StatusCollection};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-pub struct Action {
+pub struct Action<A: Attribute, S: Status> {
     name: String,
-    inner: InnerAction,
+    inner: InnerAction<A, S>,
 }
 
-impl Action {
-    pub fn new(name: String, inner: InnerAction) -> Self {
+impl<A: Attribute, S: Status> Action<A, S> {
+    pub fn new(name: String, inner: InnerAction<A, S>) -> Self {
         Self { name, inner }
     }
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
 
-    pub fn inner(&self) -> &InnerAction {
+    pub fn inner(&self) -> &InnerAction<A, S> {
         &self.inner
     }
 
-    pub fn apply_modifiers(&self, actor: &Actor, receiver: &Receiver) -> InnerAction {
+    pub fn apply_modifiers<M>(
+        &self,
+        actor: &Actor<A, S, M>,
+        receiver: &Receiver<A, S, M>,
+    ) -> InnerAction<A, S>
+    where
+        M: Modifier<Attr = A>,
+    {
         self.inner.apply_modifiers(actor, receiver, self)
     }
 }
 
 #[derive(Debug)]
-pub enum InnerAction {
-    Simple(SimpleAction),
-    SelfOther(SimpleAction, SimpleAction),
+pub enum InnerAction<A: Attribute, S: Status> {
+    Simple(SimpleAction<A, S>),
+    SelfOther(SimpleAction<A, S>, SimpleAction<A, S>),
     Custom(Box<dyn CustomAction>),
 }
 
-impl InnerAction {
-    pub fn apply_modifiers(&self, actor: &Actor, receiver: &Receiver, action: &Action) -> Self {
+impl<A: Attribute, S: Status> InnerAction<A, S> {
+    pub fn apply_modifiers<M>(
+        &self,
+        actor: &Actor<A, S, M>,
+        receiver: &Receiver<A, S, M>,
+        action: &Action<A, S>,
+    ) -> Self
+    where
+        M: Modifier<Attr = A>,
+    {
         match self {
             Self::Simple(a) => Self::Simple(a.apply_modifiers(actor, receiver, action)),
             Self::SelfOther(a1, a2) => Self::SelfOther(
@@ -51,8 +66,8 @@ impl InnerAction {
 
     pub fn apply(
         &self,
-        attribute_collections: &mut [&mut AttributeCollection],
-        status_collections: &mut [&mut StatusCollection],
+        attribute_collections: &mut [&mut AttributeCollection<A>],
+        status_collections: &mut [&mut StatusCollection<S>],
         targets: &HashMap<Target, usize>,
     ) {
         match self {
@@ -87,17 +102,17 @@ impl InnerAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SimpleAction {
+#[derive(Debug, Clone)]
+pub struct SimpleAction<A: Attribute, S: Status> {
     target: Target,
-    elements: Vec<ActionElement>,
+    elements: Vec<ActionElement<A, S>>,
 }
 
-impl SimpleAction {
+impl<A: Attribute, S: Status> SimpleAction<A, S> {
     pub fn new_empty(target: Target) -> Self {
         Self::new(target, vec![])
     }
-    pub fn new(target: Target, elements: Vec<ActionElement>) -> Self {
+    pub fn new(target: Target, elements: Vec<ActionElement<A, S>>) -> Self {
         Self { target, elements }
     }
 
@@ -105,12 +120,15 @@ impl SimpleAction {
         self.target = target;
     }
 
-    pub fn apply_modifiers(
+    pub fn apply_modifiers<M>(
         &self,
-        actor: &Actor,
-        receiver: &Receiver,
-        action: &Action,
-    ) -> SimpleAction {
+        actor: &Actor<A, S, M>,
+        receiver: &Receiver<A, S, M>,
+        action: &Action<A, S>,
+    ) -> SimpleAction<A, S>
+    where
+        M: Modifier<Attr = A>,
+    {
         let mut result = SimpleAction::new_empty(self.target);
         for e in &self.elements {
             match e {
@@ -123,22 +141,26 @@ impl SimpleAction {
         result
     }
 
-    pub fn apply(&self, attributes: &mut AttributeCollection, statuses: &mut StatusCollection) {
+    pub fn apply(
+        &self,
+        attributes: &mut AttributeCollection<A>,
+        statuses: &mut StatusCollection<S>,
+    ) {
         for e in &self.elements {
             e.apply(attributes, statuses);
         }
     }
 }
 
-pub type Actor<'a> = (
-    &'a AttributeCollection,
-    &'a StatusCollection,
-    &'a OutgoingModifierCollection,
+pub type Actor<'a, A, S, M> = (
+    &'a AttributeCollection<A>,
+    &'a StatusCollection<S>,
+    &'a OutgoingModifierCollection<M>,
 );
-pub type Receiver<'a> = (
-    &'a AttributeCollection,
-    &'a StatusCollection,
-    &'a IncomingModifierCollection,
+pub type Receiver<'a, A, S, M> = (
+    &'a AttributeCollection<A>,
+    &'a StatusCollection<S>,
+    &'a IncomingModifierCollection<M>,
 );
 
 // ===============
@@ -178,17 +200,17 @@ pub enum Target {
     Target,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ActionElement {
-    AttributeChange(AttributeChange),
-    StatusChange(StatusChange),
+#[derive(Clone, Debug)]
+pub enum ActionElement<A: Attribute, S: Status> {
+    AttributeChange(AttributeChange<A>),
+    StatusChange(StatusChange<S>),
 }
 
-impl ActionElement {
+impl<A: Attribute, S: Status> ActionElement<A, S> {
     pub(crate) fn apply(
         &self,
-        attributes: &mut AttributeCollection,
-        statuses: &mut StatusCollection,
+        attributes: &mut AttributeCollection<A>,
+        statuses: &mut StatusCollection<S>,
     ) {
         match self {
             ActionElement::AttributeChange(a) => a.apply(attributes),
@@ -198,51 +220,58 @@ impl ActionElement {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
-pub enum AttributeChangeType {
+pub enum AttributeChangeType<V: AttributeValue> {
     Add,
     Mul,
     Set,
-    Average(f64, f64), // Weights
+    Average(V, V), // Weights
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct AttributeChange {
-    name: String,
-    change: f64,
-    op: AttributeChangeType,
+pub struct AttributeChange<A: Attribute> {
+    identifier: A::Identifier,
+    change: A::Value,
+    op: AttributeChangeType<A::Value>,
 }
 
-impl Into<ActionElement> for AttributeChange {
-    fn into(self) -> ActionElement {
+impl<S: Status, A: Attribute> Into<ActionElement<A, S>> for AttributeChange<A> {
+    fn into(self) -> ActionElement<A, S> {
         ActionElement::AttributeChange(self)
     }
 }
 
-impl AttributeChange {
-    pub(crate) fn apply(&self, attributes: &mut AttributeCollection) {
-        if let Some(a) = attributes.get_attribute_mut(self.name()) {
-            match self.op {
-                AttributeChangeType::Add => a.set_value(a.value + self.change),
-                AttributeChangeType::Mul => a.set_value(a.value * self.change),
+impl<A: Attribute> AttributeChange<A> {
+    pub(crate) fn apply(&self, attributes: &mut AttributeCollection<A>) {
+        if let Some(a) = attributes.get_attribute_mut(&self.identifier) {
+            match &self.op {
+                AttributeChangeType::Add => a.set_value(a.value() + self.change),
+                AttributeChangeType::Mul => a.set_value(a.value() * self.change),
                 AttributeChangeType::Set => a.set_value(self.change),
                 AttributeChangeType::Average(weight_current, weight_new) => {
-                    a.set_value((a.value * weight_current + self.change * weight_new)
-                        / (weight_current + weight_new));
+                    a.set_value(
+                        (a.value() * *weight_current + self.change * *weight_new)
+                            / (*weight_current + *weight_new),
+                    );
                 }
             }
         }
     }
 }
 
-pub(crate) type AttributeStatusCollection<'a> = (&'a AttributeCollection, &'a StatusCollection);
+pub(crate) type AttributeStatusCollection<'a, A, S> =
+    (&'a AttributeCollection<A>, &'a StatusCollection<S>);
 
-impl AttributeChange {
-    pub(crate) fn apply_modifiers(
+impl<A: Attribute> AttributeChange<A> {
+    pub(crate) fn apply_modifiers<S, M>(
         &self,
-        actor: &Actor,
-        receiver: &Receiver,
-        action: &Action,
-    ) -> Self {
+        actor: &Actor<A, S, M>,
+        receiver: &Receiver<A, S, M>,
+        action: &Action<A, S>,
+    ) -> Self
+    where
+        S: Status,
+        M: Modifier<Attr = A>,
+    {
         let (actor_attributes, actor_statuses, actor_collection) = actor;
         let (receiver_attributes, receiver_statuses, receiver_collection) = receiver;
         let actor = (*actor_attributes, *actor_statuses);
@@ -254,37 +283,38 @@ impl AttributeChange {
             action,
         )
     }
-}
 
-impl AttributeChange {
-    pub fn new(name: &str, change: f64) -> Self {
+    pub fn new(identifier: A::Identifier, change: A::Value) -> Self {
         Self {
-            name: name.to_ascii_lowercase(),
+            identifier,
             change,
-            op : AttributeChangeType::Add
+            op: AttributeChangeType::Add,
         }
     }
 
-    pub fn with_op(mut self, op: AttributeChangeType) -> Self {
+    pub fn with_op(mut self, op: AttributeChangeType<A::Value>) -> Self {
         self.op = op;
         self
     }
 
-    pub fn name(&self) -> &str {
-        self.name.as_str()
+    pub fn identifier(&self) -> &A::Identifier {
+        &self.identifier
     }
 }
 
 /// Describes Changing a Status
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StatusChange {
-    Add(Box<dyn Status>),
-    Remove(Box<dyn Status>),
+pub enum StatusChange<S: Status> {
+    Add(S),
+    Remove(S),
 }
 
-impl StatusChange {
-    pub(crate) fn apply(&self, statuses: &mut StatusCollection) {
-        todo!()
+impl<S: Status> StatusChange<S> {
+    pub(crate) fn apply(&self, statuses: &mut StatusCollection<S>) {
+        match self {
+            Self::Add(s) => statuses.add(s.clone()),
+            Self::Remove(s) => statuses.remove(s),
+        }
     }
 }
 
@@ -301,4 +331,3 @@ impl<T: 'static> AsAny for T {
 
 #[cfg(test)]
 mod tests {}
-

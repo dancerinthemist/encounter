@@ -1,12 +1,13 @@
 mod action;
 pub mod character;
 
-pub use serde;
-pub use serde_json;
 pub use action::*;
 pub use character::*;
+pub use serde;
+pub use serde_json;
 use std::fmt::{Display, Formatter};
 use thiserror::Error;
+pub use typetag;
 
 #[derive(Debug, Error)]
 pub enum Error {
