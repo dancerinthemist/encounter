@@ -107,6 +107,18 @@ pub trait AttributeValue:
 {
 }
 
+impl<
+        T: Add<Output = T>
+            + Sub<Output = T>
+            + Mul<T, Output = T>
+            + Div<T, Output = T>
+            + Debug
+            + Copy
+            + Clone,
+    > AttributeValue for T
+{
+}
+
 pub trait Attribute: Default + Debug + Clone {
     type Value: AttributeValue;
     type Identifier: AttributeIdentifier;
@@ -117,6 +129,10 @@ pub trait Attribute: Default + Debug + Clone {
         self
     }
 }
+
+pub trait FloatAttribute: Attribute<Value = f64> {}
+
+pub trait StringAttribute: Attribute<Identifier = String> {}
 
 // ===============
 // STATUS

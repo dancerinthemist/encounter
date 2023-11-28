@@ -1,13 +1,15 @@
-pub(crate) mod modifier;
+pub mod modifier;
 pub mod output;
 
-use crate::action::modifier::{IncomingModifierCollection, Modifier, OutgoingModifierCollection};
 use crate::{Attribute, AttributeCollection, AttributeValue, Status, StatusCollection};
+pub use modifier::Modifier;
+use modifier::{IncomingModifierCollection, OutgoingModifierCollection};
 use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
+#[derive(Debug, Clone)]
 pub struct Action<A: Attribute, S: Status> {
     name: String,
     inner: InnerAction<A, S>,
@@ -37,7 +39,7 @@ impl<A: Attribute, S: Status> Action<A, S> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InnerAction<A: Attribute, S: Status> {
     Simple(SimpleAction<A, S>),
     SelfOther(SimpleAction<A, S>, SimpleAction<A, S>),
@@ -194,9 +196,10 @@ impl Clone for Box<dyn CustomAction> {
 // Target & Changes
 // ===============
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Hash)]
+#[derive(Default, Debug, Copy, Clone, Serialize, Deserialize, PartialOrd, PartialEq, Eq, Hash)]
 pub enum Target {
     Actor,
+    #[default]
     Target,
 }
 
