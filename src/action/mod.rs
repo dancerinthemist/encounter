@@ -66,6 +66,30 @@ impl<A: Attribute, S: Status> InnerAction<A, S> {
         }
     }
 
+    pub fn apply_actor_only(
+        &self,
+        attribute_collections: &mut [&mut AttributeCollection<A>],
+        status_collections: &mut [&mut StatusCollection<S>],
+        targets: &HashMap<Target, usize>,
+    ) {
+        match self {
+            InnerAction::Simple(a) | InnerAction::SelfOther(a,_) => {
+                if a.target == Target::Actor {
+                    a.apply(
+                        *attribute_collections
+                            .get_mut(targets[&a.target])
+                            .unwrap(),
+                        *status_collections
+                            .get_mut(targets[&a.target])
+                            .unwrap(),
+                    );
+                }
+            }
+            _ => { todo!() }
+        }
+    }
+
+
     pub fn apply(
         &self,
         attribute_collections: &mut [&mut AttributeCollection<A>],
@@ -76,10 +100,10 @@ impl<A: Attribute, S: Status> InnerAction<A, S> {
             InnerAction::Simple(a) => {
                 a.apply(
                     *attribute_collections
-                        .get_mut(targets[&Target::Target])
+                        .get_mut(targets[&a.target])
                         .unwrap(),
                     *status_collections
-                        .get_mut(targets[&Target::Target])
+                        .get_mut(targets[&a.target])
                         .unwrap(),
                 );
             }
@@ -92,10 +116,10 @@ impl<A: Attribute, S: Status> InnerAction<A, S> {
                 );
                 a2.apply(
                     *attribute_collections
-                        .get_mut(targets[&Target::Target])
+                        .get_mut(targets[&a2.target])
                         .unwrap(),
                     *status_collections
-                        .get_mut(targets[&Target::Target])
+                        .get_mut(targets[&a2.target])
                         .unwrap(),
                 );
             }

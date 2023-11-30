@@ -16,6 +16,7 @@ pub type Character<A, S, M> = (
     OutgoingModifierCollection<M>,
 );
 
+#[derive(Debug, Clone, Default)]
 pub struct CharacterBase {
     name: String,
 }
@@ -24,9 +25,8 @@ impl CharacterBase {
     pub(crate) fn name(&self) -> &str {
         self.name.as_ref()
     }
-}
 
-impl CharacterBase {
+
     pub fn new<A, S, M>(name: &str) -> Character<A, S, M>
     where
         A: Attribute,
